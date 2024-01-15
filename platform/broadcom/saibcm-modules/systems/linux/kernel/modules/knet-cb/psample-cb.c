@@ -98,6 +98,14 @@ LKM_MOD_PARAM(psample_qlen, "i", int, 0);
 MODULE_PARM_DESC(psample_qlen,
 "psample queue length (default 1024 buffers)");
 
+#if !IS_ENABLED(CONFIG_PSAMPLE)
+inline struct 
+psample_group *psample_group_get(struct net *net, u32 group_num)
+{
+    return NULL;
+}
+#endif
+
 /* driver proc entry root */
 static struct proc_dir_entry *psample_proc_root = NULL;
 static struct proc_dir_entry *knet_cb_proc_root = NULL;
@@ -405,17 +413,32 @@ psample_task(struct work_struct *work)
  
         /* send to psample */
         if (pkt) {
+#if ((IS_ENABLED(CONFIG_PSAMPLE) && LINUX_VERSION_CODE >= KERNEL_VERSION(5,13,0)) || \
+     (defined PSAMPLE_MD_EXTENDED_ATTR && PSAMPLE_MD_EXTENDED_ATTR))
+            struct psample_metadata md = {0};
+            md.trunc_size = pkt->meta.trunc_size;
+            md.in_ifindex = pkt->meta.src_ifindex;
+            md.out_ifindex = pkt->meta.dst_ifindex;
+#endif
             PSAMPLE_CB_DBG_PRINT("%s: group 0x%x, trunc_size %d, src_ifdx 0x%x, dst_ifdx 0x%x, sample_rate %d\n",
                     __func__, pkt->group->group_num, 
                     pkt->meta.trunc_size, pkt->meta.src_ifindex, 
                     pkt->meta.dst_ifindex, pkt->meta.sample_rate);
 
+#if ((IS_ENABLED(CONFIG_PSAMPLE) && LINUX_VERSION_CODE >= KERNEL_VERSION(5,13,0)) || \
+     (defined PSAMPLE_MD_EXTENDED_ATTR && PSAMPLE_MD_EXTENDED_ATTR))
+            psample_sample_packet(pkt->group, 
+                                  pkt->skb,
+                                  pkt->meta.sample_rate,
+                                  &md);
+#else
             psample_sample_packet(pkt->group, 
                                   pkt->skb, 
                                   pkt->meta.trunc_size,
                                   pkt->meta.src_ifindex,
                                   pkt->meta.dst_ifindex,
                                   pkt->meta.sample_rate);
+#endif
             g_psample_stats.pkts_f_psample_mod++;
  
             dev_kfree_skb_any(pkt->skb);
@@ -715,11 +738,12 @@ psample_proc_rate_write(struct file *file, const char *buf,
 }
 
 struct proc_ops psample_proc_rate_file_ops = {
-    proc_open:       psample_proc_rate_open,
-    proc_read:       seq_read,
-    proc_lseek:     seq_lseek,
-    proc_write:      psample_proc_rate_write,
-    proc_release:    single_release,
+    PROC_OWNER(THIS_MODULE)
+    .proc_open =      psample_proc_rate_open,
+    .proc_read =      seq_read,
+    .proc_lseek =     seq_lseek,
+    .proc_write =     psample_proc_rate_write,
+    .proc_release =   single_release,
 };
 
 /*
@@ -813,11 +837,12 @@ psample_proc_size_write(struct file *file, const char *buf,
 }
 
 struct proc_ops psample_proc_size_file_ops = {
-    proc_open:       psample_proc_size_open,
-    proc_read:       seq_read,
-    proc_lseek:     seq_lseek,
-    proc_write:      psample_proc_size_write,
-    proc_release:    single_release,
+    PROC_OWNER(THIS_MODULE)
+    .proc_open =      psample_proc_size_open,
+    .proc_read =      seq_read,
+    .proc_lseek =     seq_lseek,
+    .proc_write =     psample_proc_size_write,
+    .proc_release =   single_release,
 };
 
 /*
@@ -853,11 +878,12 @@ psample_proc_map_open(struct inode * inode, struct file * file)
 }
 
 struct proc_ops psample_proc_map_file_ops = {
-    proc_open:       psample_proc_map_open,
-    proc_read:       seq_read,
-    proc_lseek:     seq_lseek,
-    proc_write:      NULL,
-    proc_release:    single_release,
+    PROC_OWNER(THIS_MODULE)
+    .proc_open =       psample_proc_map_open,
+    .proc_read =       seq_read,
+    .proc_lseek =      seq_lseek,
+    .proc_write =      NULL,
+    .proc_release =    single_release,
 };
 
 /*
@@ -922,11 +948,12 @@ psample_proc_debug_write(struct file *file, const char *buf,
 }
 
 struct proc_ops psample_proc_debug_file_ops = {
-    proc_open:       psample_proc_debug_open,
-    proc_read:       seq_read,
-    proc_lseek:     seq_lseek,
-    proc_write:      psample_proc_debug_write,
-    proc_release:    single_release,
+    PROC_OWNER(THIS_MODULE)
+    .proc_open =       psample_proc_debug_open,
+    .proc_read =       seq_read,
+    .proc_lseek =      seq_lseek,
+    .proc_write =      psample_proc_debug_write,
+    .proc_release =    single_release,
 };
 
 static int
@@ -981,11 +1008,12 @@ psample_proc_stats_write(struct file *file, const char *buf,
     return count;
 }
 struct proc_ops psample_proc_stats_file_ops = {
-    proc_open:       psample_proc_stats_open,
-    proc_read:       seq_read,
-    proc_lseek:     seq_lseek,
-    proc_write:      psample_proc_stats_write,
-    proc_release:    single_release,
+    PROC_OWNER(THIS_MODULE)
+    .proc_open =      psample_proc_stats_open,
+    .proc_read =      seq_read,
+    .proc_lseek =     seq_lseek,
+    .proc_write =     psample_proc_stats_write,
+    .proc_release =   single_release,
 };
 
 int psample_cleanup(void)
@@ -1009,7 +1037,7 @@ int psample_init(void)
     struct proc_dir_entry *entry;
 
     /* create procfs for psample */
-    proc_mkdir(PSAMPLE_PROCFS_PATH, NULL);
+    knet_cb_proc_root = proc_mkdir(PSAMPLE_PROCFS_PATH, NULL);
     snprintf(psample_procfs_path, sizeof(psample_procfs_path), "%s/%s", PSAMPLE_PROCFS_PATH, PSAMPLE_CB_NAME);
     psample_proc_root = proc_mkdir(psample_procfs_path, NULL);
 
